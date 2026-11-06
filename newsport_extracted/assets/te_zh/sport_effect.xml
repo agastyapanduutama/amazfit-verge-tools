@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sporteffects>
+    <effect id="0">
+        <te>15</te>
+        <time>1200</time> <!--s-->
+        <!--<desc>初级燃脂</desc>-->
+    </effect>
+
+    <effect id="1">
+        <te>20</te>
+        <time>1800</time> <!--s-->
+        <!--<desc>有氧健身</desc>-->
+    </effect>
+
+    <effect id="2">
+        <te>25</te>
+        <time>3600</time> <!--s-->
+        <!--<desc>进阶燃脂</desc>-->
+    </effect>
+
+    <effect id="3">
+        <te>25</te>
+        <time>2400</time> <!--s-->
+        <!--<desc>有氧塑形</desc>-->
+    </effect>
+
+    <effect id="4">
+        <te>30</te>
+        <time>1500</time> <!--s-->
+        <!--<desc>有氧能力提升</desc>-->
+    </effect>
+
+    <effect id="5">
+        <te>35</te>
+        <time>2100</time> <!--s-->
+        <!--<desc>耐力增强</desc>-->
+    </effect>
+
+    <effect id="6">
+        <te>40</te>
+        <time>2400</time> <!--s-->
+        <!--<desc>高强度有氧</desc>-->
+    </effect>
+
+    <effect id="7">
+        <te>45</te>
+        <time>3000</time> <!--s-->
+        <!--<desc>超高强度</desc>-->
+    </effect>
+</sporteffects>
