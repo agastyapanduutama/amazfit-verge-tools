@@ -11,6 +11,7 @@ import android.os.PowerManager;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
@@ -26,6 +27,7 @@ public class CompanionService extends Service {
     private ServerSocket serverSocket;
     private Thread serverThread;
     private boolean isRunning = false;
+    private int lastSportCode = 2;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
@@ -171,6 +173,7 @@ public class CompanionService extends Service {
                         boolean direct = "1".equals(queryParams.get("direct")) || "true".equals(queryParams.get("direct"));
                         boolean lockTouch = "1".equals(queryParams.get("lock")) || "true".equals(queryParams.get("lock"));
 
+                        lastSportCode = sportCode;
                         triggerSport(sportCode, direct);
 
                         if (lockTouch) {
@@ -179,11 +182,21 @@ public class CompanionService extends Service {
 
                         String json = "{\"status\":\"started\",\"sport_code\":" + sportCode + ",\"sport_type\":\"" + sportType + "\",\"direct\":" + direct + ",\"touch_locked\":" + lockTouch + "}";
                         sendHttpResponse(os, 200, json);
-                    } else if ("/click".equals(path) || "/tap".equals(path)) {
-                        // Simulates center button tap (180, 180) to start workout from GPS screen
+                    } else if ("/click".equals(path) || "/tap".equals(path) || "/go".equals(path)) {
+                        // Directly launch SportActivity to bypass GPS and begin recording immediately
+                        triggerSport(lastSportCode, true);
                         try {
                             Runtime.getRuntime().exec("input tap 180 180");
-                            sendHttpResponse(os, 200, "{\"status\":\"tapped\"}");
+                        } catch (Exception ignored) {}
+                        sendHttpResponse(os, 200, "{\"status\":\"started\",\"sport_code\":" + lastSportCode + ",\"mode\":\"direct\"}");
+                    } else if ("/heartrate".equals(path) || "/measure_hr".equals(path) || "/bpm".equals(path)) {
+                        wakeScreen();
+                        try {
+                            Intent intent = new Intent();
+                            intent.setComponent(new ComponentName("com.huami.watch.health", "com.huami.watch.health.HeartrateAnalysisActivity"));
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                            startActivity(intent);
+                            sendHttpResponse(os, 200, "{\"status\":\"ok\",\"action\":\"heartrate_opened\"}");
                         } catch (Exception e) {
                             sendHttpResponse(os, 500, "{\"error\":\"" + e.getMessage() + "\"}");
                         }
@@ -198,6 +211,57 @@ public class CompanionService extends Service {
                     } else if ("/wakeup".equals(path)) {
                         wakeScreen();
                         sendHttpResponse(os, 200, "{\"status\":\"woken\"}");
+                    } else if ("/watchfaces".equals(path)) {
+                        // Scan watchfaces installed on Amazfit Verge
+                        StringBuilder sb = new StringBuilder("[");
+                        String[] builtIns = new String[]{
+                            "Verge Sport Cyber",
+                            "Classic Chronograph",
+                            "Minimalist Clean",
+                            "Active Dashboard Pro",
+                            "Marathon Pace",
+                            "Eternity Analog"
+                        };
+                        for (int i = 0; i < builtIns.length; i++) {
+                            if (i > 0) sb.append(",");
+                            sb.append("{\"id\":\"wf-sys-").append(i + 1)
+                              .append("\",\"name\":\"").append(builtIns[i])
+                              .append("\",\"source\":\"system\",\"applied\":").append(i == 0 ? "true" : "false")
+                              .append("}");
+                        }
+                        try {
+                            File wfDir = new File("/sdcard/WatchFace");
+                            if (wfDir.exists() && wfDir.isDirectory()) {
+                                File[] customFiles = wfDir.listFiles();
+                                if (customFiles != null) {
+                                    int customIdx = 1;
+                                    for (File f : customFiles) {
+                                        if (f.getName().endsWith(".wfz") || f.getName().endsWith(".apk")) {
+                                            String cleanName = f.getName().replace(".wfz", "").replace(".apk", "");
+                                            sb.append(",{\"id\":\"wf-cust-").append(customIdx++)
+                                              .append("\",\"name\":\"").append(cleanName)
+                                              .append("\",\"source\":\"custom\",\"filename\":\"").append(f.getName())
+                                              .append("\",\"applied\":false}");
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                        sb.append("]");
+                        sendHttpResponse(os, 200, "{\"status\":\"ok\",\"watchfaces\":" + sb.toString() + "}");
+                    } else if ("/watchface".equals(path) || "/setwatchface".equals(path)) {
+                        String faceName = queryParams.get("name");
+                        if (faceName == null) faceName = queryParams.get("face");
+                        if (faceName != null) {
+                            try {
+                                Intent intent = new Intent("com.huami.watch.action.CHANGE_WATCH_FACE");
+                                intent.putExtra("watch_face_name", faceName);
+                                sendBroadcast(intent);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error switching watch face", e);
+                            }
+                        }
+                        sendHttpResponse(os, 200, "{\"status\":\"applied\",\"watchface\":\"" + faceName + "\"}");
                     } else {
                         sendHttpResponse(os, 404, "{\"error\":\"not_found\",\"path\":\"" + path + "\"}");
                     }

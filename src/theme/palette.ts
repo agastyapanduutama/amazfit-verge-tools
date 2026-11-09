@@ -19,6 +19,8 @@ export interface ThemePalette {
   focusRing: string;
 }
 
+export type ColorPalette = ThemePalette;
+
 export const PALETTES: Record<ThemeMode, ThemePalette> = {
   dark: {
     mode: 'dark',

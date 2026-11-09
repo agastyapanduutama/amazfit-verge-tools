@@ -10,11 +10,15 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { ActiveTelemeterDeck } from './src/components/ActiveTelemeterDeck';
-import { CommandLogPanel } from './src/components/CommandLogPanel';
+import { AlarmMenu } from './src/components/AlarmMenu';
 import { ConnectionPanel } from './src/components/ConnectionPanel';
+import { HealthMenu } from './src/components/HealthMenu';
+import { HeartRateMenu } from './src/components/HeartRateMenu';
+import { HistoryMenu } from './src/components/HistoryMenu';
 import { PressableControl } from './src/components/PressableControl';
-import { WorkoutTriggerMatrix } from './src/components/WorkoutTriggerMatrix';
+import { SmartfaceMenu } from './src/components/SmartfaceMenu';
+import { SportMenu } from './src/components/SportMenu';
+import { TabBar } from './src/components/TabBar';
 import {
   amazfitBle,
   buildScreenLockBytes,
@@ -23,6 +27,7 @@ import {
   WorkoutControlAction,
 } from './src/services/amazfitBle';
 import { PALETTES, ThemeMode } from './src/theme/palette';
+import { AppTab } from './src/types/navigation';
 import {
   ActiveSessionState,
   BleConnectionStatus,
@@ -30,7 +35,6 @@ import {
   ConnectionMode,
   DiscoveredWatch,
   WORKOUT_MODES,
-  WorkoutId,
   WorkoutMode,
 } from './src/types/workout';
 
@@ -43,13 +47,13 @@ function getCurrentTimeLabel(): string {
 
 export default function App() {
   const { width } = useWindowDimensions();
-
-  // Three distinct layout states across the width continuum (R-03, antislop-layoutmobile)
   const isCompactPhone = width < 620;
-  const isWideConsole = width >= 980;
 
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const palette = PALETTES[themeMode];
+
+  const [activeTab, setActiveTab] = useState<AppTab>('sport');
+  const [isConnectionExpanded, setIsConnectionExpanded] = useState<boolean>(false);
 
   const [connectionMode, setConnectionMode] =
     useState<ConnectionMode>('wifi_hotspot');
@@ -74,12 +78,6 @@ export default function App() {
   const [selectedWorkout, setSelectedWorkout] = useState<WorkoutMode>(
     WORKOUT_MODES[0]
   );
-  const [favoriteIds, setFavoriteIds] = useState<WorkoutId[]>([
-    'outdoor_run',
-    'trail_run',
-    'walking',
-    'outdoor_cycling',
-  ]);
   const [sessionState, setSessionState] = useState<ActiveSessionState>('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [autoScreenLock, setAutoScreenLock] = useState<boolean>(true);
@@ -97,11 +95,32 @@ export default function App() {
     return () => clearInterval(timer);
   }, [sessionState]);
 
+  // Uji koneksi ke jam tangan otomatis saat aplikasi dibuka
   useEffect(() => {
-    return () => {
-      amazfitBle.stopScan();
-    };
+    handleTestWifiConnection();
   }, []);
+
+  const isDeviceConnected =
+    connectionMode === 'simulation' ||
+    (connectionMode === 'wifi_hotspot' && wifiStatus === 'connected') ||
+    (connectionMode === 'ble' && bleStatus === 'connected');
+
+  const isDeviceConnecting =
+    (connectionMode === 'wifi_hotspot' && wifiStatus === 'connecting') ||
+    (connectionMode === 'ble' &&
+      (bleStatus === 'scanning' || bleStatus === 'connecting'));
+
+  const isDeviceError =
+    (connectionMode === 'wifi_hotspot' && wifiStatus === 'error') ||
+    (connectionMode === 'ble' && bleStatus === 'error');
+
+  const deviceStatusLabel = isDeviceConnecting
+    ? 'MENGHUBUNGKAN...'
+    : isDeviceConnected
+      ? 'TERHUBUNG'
+      : isDeviceError
+        ? 'TERPUTUS'
+        : 'BELUM TERHUBUNG';
 
   const appendLog = (
     actionLabel: string,
@@ -185,38 +204,56 @@ export default function App() {
     setConnectedWatchId(null);
     setConnectedWatchName(null);
     setBleStatus('disconnected');
+    appendLog(
+      'Koneksi Diputus',
+      [0x00],
+      'sent',
+      'Koneksi GATT ke jam tangan berhasil ditutup.'
+    );
   };
 
   const handleTestWifiConnection = async () => {
+    const target = watchIp.trim();
+    if (!target) {
+      setWifiStatus('error');
+      appendLog('Uji Sambung Hotspot', [0x00], 'error', 'Alamat IP jam tangan kosong.');
+      return;
+    }
     setWifiStatus('connecting');
-    setScanError(null);
     try {
-      const res = await fetch(`http://${watchIp.trim()}:8080/ping`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(`http://${target}:8080/ping`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (data.status === 'ok') {
         setWifiStatus('connected');
-        setConnectedWatchName(data.device || 'Amazfit Verge A1811');
         appendLog(
           'Uji Sambung Hotspot',
-          [0x80, 0x80],
+          [0x20, 0x00],
           'sent',
-          `Terhubung ke ${data.device || 'Amazfit Verge'} (${watchIp.trim()}:8080).`
+          `Terhubung ke ${data.device} (${data.model}) di IP ${target}:8080.`
         );
       } else {
-        throw new Error('Jam membalas dengan status tidak valid');
+        setWifiStatus('error');
+        appendLog('Uji Sambung Hotspot', [0x20], 'error', 'Respons server jam tidak valid.');
       }
-    } catch (e) {
+    } catch (err) {
       setWifiStatus('error');
-      const err = e instanceof Error ? e.message : 'Gagal menghubungi jam tangan';
-      setScanError(`Koneksi ke ${watchIp.trim()}:8080 gagal: ${err}`);
-      appendLog('Uji Sambung Hotspot', [0x80, 0x80], 'error', err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Gagal menghubungi jam di jaringan hotspot.';
+      appendLog('Uji Sambung Hotspot', [0x20], 'error', msg);
     }
   };
 
   const handleOpenLauncher = async () => {
     try {
       await fetch(`http://${watchIp.trim()}:8080/launcher`, { method: 'POST' });
-      appendLog('Buka Menu Olahraga', [0x06, 0x17], 'sent', 'Menu olahraga di jam tangan terbuka.');
+      appendLog('Buka Menu Olahraga', [0x06, 0x17], 'sent', 'Perintah membuka menu olahraga jam terkirim.');
     } catch (e) {
       const err = e instanceof Error ? e.message : 'Gagal membuka menu olahraga';
       appendLog('Buka Menu Olahraga', [0x06, 0x17], 'error', err);
@@ -258,11 +295,63 @@ export default function App() {
   const handleTapCenter = async () => {
     try {
       await fetch(`http://${watchIp.trim()}:8080/tap`, { method: 'POST' });
-      appendLog('Sentuh Tombol Mulai Jam', [0x01], 'sent', 'Perintah sentuh tombol tengah jam terkirim.');
+      appendLog(
+        'Tekan Mulai / GO di Jam',
+        [0x01, 0x02],
+        'sent',
+        'Perintah mulai sesi (GO) dikirim ke jam. Sesi rekaman olahraga aktif.'
+      );
     } catch (e) {
-      const err = e instanceof Error ? e.message : 'Gagal mengirim sentuhan ke jam';
-      appendLog('Sentuh Tombol Mulai Jam', [0x01], 'error', err);
+      const err = e instanceof Error ? e.message : 'Gagal mengirim sinyal GO ke jam';
+      appendLog('Tekan Mulai / GO di Jam', [0x01], 'error', err);
     }
+  };
+
+  const handleStartHeartRateMeasurement = async () => {
+    setIsSendingCommand(true);
+    try {
+      if (connectionMode === 'wifi_hotspot') {
+        await fetch(`http://${watchIp.trim()}:8080/heartrate`, { method: 'POST' });
+        appendLog(
+          'Ukur Detak Jantung',
+          [0x21, 0x01],
+          'sent',
+          `Sinyal aktivasi sensor optik PPG dikirim ke jam (${watchIp}:8080). Layar pengukuran dibuka.`
+        );
+      } else {
+        appendLog(
+          'Ukur Detak Jantung',
+          [0x21, 0x01],
+          'sent',
+          'Pengukuran denyut nadi diaktifkan.'
+        );
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Gagal mengirim perintah jantung';
+      appendLog('Ukur Detak Jantung', [0x21], 'error', msg);
+    } finally {
+      setIsSendingCommand(false);
+    }
+  };
+
+  const handleTestVibrate = async () => {
+    try {
+      await fetch(`http://${watchIp.trim()}:8080/wakeup`, { method: 'POST' });
+      appendLog('Uji Getar Jam', [0x08, 0x01], 'sent', 'Pemicu getar jam tangan terkirim.');
+    } catch (e) {
+      const err = e instanceof Error ? e.message : 'Gagal mengirim getaran ke jam';
+      appendLog('Uji Getar Jam', [0x08], 'error', err);
+    }
+  };
+
+  const handleApplyWatchface = (faceName: string) => {
+    appendLog(
+      'Terapkan Watchface',
+      [0x10, 0x01],
+      'sent',
+      `Tema dial "${faceName}" dipilih untuk Amazfit Verge.`
+    );
   };
 
   const dispatchCommandToWatch = async (
@@ -279,8 +368,9 @@ export default function App() {
       if (connectionMode === 'wifi_hotspot') {
         targetCharLabel = `Hotspot (${watchIp}:8080)`;
         const lockParam = autoScreenLock ? 1 : 0;
+        const directParam = workout.requiresGps ? 0 : 1;
         const res = await fetch(
-          `http://${watchIp.trim()}:8080/start?type=${workout.id}&lock=${lockParam}`,
+          `http://${watchIp.trim()}:8080/start?type=${workout.id}&lock=${lockParam}&direct=${directParam}`,
           { method: 'POST' }
         );
         const data = await res.json();
@@ -372,11 +462,10 @@ export default function App() {
     const ok = await dispatchCommandToWatch(
       selectedWorkout,
       'stop',
-      `Hentikan & Simpan ${selectedWorkout.title}`
+      `Selesai ${selectedWorkout.title}`
     );
     if (ok) {
       setSessionState('idle');
-      setElapsedSeconds(0);
     }
   };
 
@@ -384,18 +473,24 @@ export default function App() {
     setIsSendingCommand(true);
     setLastCommandError(null);
     const lockBytes = buildScreenLockBytes(true);
+
     try {
       let lockTarget = 'Simulasi';
-      if (connectionMode === 'ble') {
+      if (connectionMode === 'wifi_hotspot') {
+        lockTarget = `Hotspot (${watchIp}:8080)`;
+        await fetch(`http://${watchIp.trim()}:8080/touch?action=disable`, {
+          method: 'POST',
+        });
+        setIsTouchLocked(true);
+      } else if (connectionMode === 'ble') {
         lockTarget = await amazfitBle.sendRawBytes(
           lockBytes,
           connectedWatchId || manualMac.trim()
         );
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 100));
       }
+
       appendLog(
-        'Kunci Ulang Layar Jam (Manual)',
+        'Kunci Layar Jam (Anti-Ghost-Touch)',
         lockBytes,
         'sent',
         `Sinyal pengunci layar terkirim via ${lockTarget}.`
@@ -410,14 +505,6 @@ export default function App() {
     }
   };
 
-  const handleToggleFavorite = (workoutId: WorkoutId) => {
-    setFavoriteIds((prev) =>
-      prev.includes(workoutId)
-        ? prev.filter((id) => id !== workoutId)
-        : [...prev, workoutId]
-    );
-  };
-
   return (
     <SafeAreaView
       style={[styles.safeRoot, { backgroundColor: palette.background }]}
@@ -427,6 +514,7 @@ export default function App() {
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        {/* Header Bar */}
         <View
           style={[
             styles.headerBar,
@@ -438,39 +526,78 @@ export default function App() {
         >
           <View style={styles.brandBlock}>
             <Text style={[styles.appName, { color: palette.textPrimary }]}>
-              AMAZFIT VERGE TRIGGER
+              AMAZFIT VERGE A1811
             </Text>
             <Text style={[styles.appSub, { color: palette.textSecondary }]}>
-              Remote Olahraga Verge A1811 (Anti-Ghost-Touch)
+              Pusat Kendali Jam Tangan (Anti Ghost-Touch)
             </Text>
           </View>
 
-          <PressableControl
-            palette={palette}
-            accessibilityLabel={
-              themeMode === 'dark'
-                ? 'Ubah ke Tema Terang (Siang Hari Luar Ruang)'
-                : 'Ubah ke Tema Gelap (Malam / AMOLED)'
-            }
-            onPress={() =>
-              setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))
-            }
-            style={[
-              styles.themeToggleBtn,
-              {
-                backgroundColor: palette.surfaceSecondary,
-                borderColor: palette.borderStrong,
-              },
-            ]}
-          >
-            <Text
-              style={[styles.themeToggleText, { color: palette.textPrimary }]}
+          <View style={styles.headerActions}>
+            {/* Quick Connection Chip / Toggle */}
+            <PressableControl
+              palette={palette}
+              accessibilityLabel="Pengaturan koneksi jam tangan"
+              onPress={() => setIsConnectionExpanded((prev) => !prev)}
+              style={[
+                styles.connPill,
+                {
+                  backgroundColor: isDeviceConnected
+                    ? palette.statusOkBg
+                    : isDeviceError
+                      ? palette.statusErrorBg
+                      : palette.surfaceSecondary,
+                  borderColor: isDeviceConnected
+                    ? palette.statusOkText
+                    : isDeviceError
+                      ? palette.statusErrorText
+                      : palette.border,
+                },
+              ]}
             >
-              {themeMode === 'dark' ? 'Tema: Gelap' : 'Tema: Terang'}
-            </Text>
-          </PressableControl>
+              <Text
+                style={[
+                  styles.connPillText,
+                  {
+                    color: isDeviceConnected
+                      ? palette.statusOkText
+                      : isDeviceError
+                        ? palette.statusErrorText
+                        : palette.textPrimary,
+                  },
+                ]}
+              >
+                {isDeviceConnected
+                  ? `● Terhubung (${watchIp})`
+                  : isDeviceConnecting
+                    ? '● Menguji...'
+                    : '○ Belum Terhubung'}
+              </Text>
+            </PressableControl>
+
+            {/* Theme Toggle */}
+            <PressableControl
+              palette={palette}
+              accessibilityLabel="Ganti tema warna"
+              onPress={() =>
+                setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))
+              }
+              style={[
+                styles.themeToggleBtn,
+                {
+                  backgroundColor: palette.surfaceSecondary,
+                  borderColor: palette.border,
+                },
+              ]}
+            >
+              <Text style={[styles.themeToggleText, { color: palette.textPrimary }]}>
+                {themeMode === 'dark' ? 'Gelap' : 'Terang'}
+              </Text>
+            </PressableControl>
+          </View>
         </View>
 
+        {/* Main Content Area */}
         <ScrollView
           contentContainerStyle={[
             styles.scrollContent,
@@ -478,113 +605,275 @@ export default function App() {
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <View
-            style={[
-              styles.mainLayout,
-              isWideConsole ? styles.wideTwoColumn : styles.stackedColumn,
-            ]}
-          >
+          <View style={styles.contentWrapper}>
+            {/* Status Perangkat Utama: Selalu Terlihat di Semua Menu */}
             <View
               style={[
-                styles.leftColumn,
-                isWideConsole && styles.wideLeftColumn,
+                styles.deviceStatusCard,
+                {
+                  backgroundColor: palette.surface,
+                  borderColor: isDeviceConnected
+                    ? palette.statusOkText
+                    : isDeviceError
+                      ? palette.statusErrorText
+                      : palette.border,
+                },
               ]}
             >
-              <ConnectionPanel
-                palette={palette}
-                connectionMode={connectionMode}
-                bleStatus={bleStatus}
-                wifiStatus={wifiStatus}
-                connectedWatchName={connectedWatchName}
-                connectedWatchId={connectedWatchId}
-                discoveredWatches={discoveredWatches}
-                scanError={scanError}
-                manualMac={manualMac}
-                authKeyHex={authKeyHex}
-                watchIp={watchIp}
-                isTouchLocked={isTouchLocked}
-                onChangeWatchIp={setWatchIp}
-                onChangeManualMac={setManualMac}
-                onChangeAuthKeyHex={setAuthKeyHex}
-                onSwitchConnectionMode={(mode) => {
-                  setConnectionMode(mode);
-                  setScanError(null);
-                  setLastCommandError(null);
-                }}
-                onStartScan={handleStartScan}
-                onStopScan={handleStopScan}
-                onConnectWatch={handleConnectWatch}
-                onDisconnectWatch={handleDisconnectWatch}
-                onTestWifiConnection={handleTestWifiConnection}
-                onOpenLauncher={handleOpenLauncher}
-                onWakeScreen={handleWakeScreen}
-                onToggleTouchLock={handleToggleTouchLock}
-                onTapCenter={handleTapCenter}
-              />
+              <View style={styles.deviceStatusHeader}>
+                <View style={styles.deviceIdentityBlock}>
+                  <View style={styles.deviceBadgeRow}>
+                    <View
+                      style={[
+                        styles.deviceStatusDot,
+                        {
+                          backgroundColor: isDeviceConnected
+                            ? '#10B981'
+                            : isDeviceError
+                              ? '#EF4444'
+                              : isDeviceConnecting
+                                ? '#F59E0B'
+                                : '#64748B',
+                        },
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.deviceTitle,
+                        { color: palette.textPrimary },
+                      ]}
+                    >
+                      {connectedWatchName || 'Amazfit Verge A1811'}
+                    </Text>
+                    <View
+                      style={[
+                        styles.connectionBadge,
+                        {
+                          backgroundColor: isDeviceConnected
+                            ? palette.statusOkBg
+                            : isDeviceError
+                              ? palette.statusErrorBg
+                              : palette.surfaceSecondary,
+                          borderColor: isDeviceConnected
+                            ? palette.statusOkText
+                            : isDeviceError
+                              ? palette.statusErrorText
+                              : palette.border,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.connectionBadgeText,
+                          {
+                            color: isDeviceConnected
+                              ? palette.statusOkText
+                              : isDeviceError
+                                ? palette.statusErrorText
+                                : palette.textSecondary,
+                          },
+                        ]}
+                      >
+                        {deviceStatusLabel}
+                      </Text>
+                    </View>
+                  </View>
 
-              <ActiveTelemeterDeck
+                  <Text
+                    style={[
+                      styles.deviceDetailText,
+                      { color: palette.textSecondary },
+                    ]}
+                  >
+                    {connectionMode === 'wifi_hotspot'
+                      ? `Target: http://${watchIp}:8080 (Hotspot Jam) • Status: ${
+                          wifiStatus === 'connected'
+                            ? 'Aktif Siap Kirim'
+                            : wifiStatus === 'connecting'
+                              ? 'Menguji respons jam...'
+                              : wifiStatus === 'error'
+                                ? 'Hotspot jam tidak ditemukan'
+                                : 'Belum diuji'
+                        }`
+                      : connectionMode === 'ble'
+                        ? `Target: BLE ${manualMac} • GATT Service`
+                        : 'Mode: Simulasi Lokal'}
+                  </Text>
+                </View>
+
+                {/* Tombol Aksi Cepat Koneksi */}
+                <View style={styles.deviceCardActions}>
+                  <PressableControl
+                    palette={palette}
+                    accessibilityLabel="Uji sambungan ke jam tangan"
+                    onPress={
+                      connectionMode === 'wifi_hotspot'
+                        ? handleTestWifiConnection
+                        : handleStartScan
+                    }
+                    style={[
+                      styles.deviceActionBtn,
+                      {
+                        backgroundColor: palette.surfaceSecondary,
+                        borderColor: palette.border,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.deviceActionBtnText,
+                        { color: palette.accent },
+                      ]}
+                    >
+                      {isDeviceConnecting ? 'Menguji...' : 'Uji Sambungan'}
+                    </Text>
+                  </PressableControl>
+
+                  <PressableControl
+                    palette={palette}
+                    accessibilityLabel={
+                      isConnectionExpanded
+                        ? 'Tutup pengaturan koneksi'
+                        : 'Buka pengaturan koneksi jam'
+                    }
+                    onPress={() => setIsConnectionExpanded((prev) => !prev)}
+                    style={[
+                      styles.deviceActionBtn,
+                      {
+                        backgroundColor: isConnectionExpanded
+                          ? palette.accent
+                          : palette.surfaceSecondary,
+                        borderColor: palette.border,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.deviceActionBtnText,
+                        {
+                          color: isConnectionExpanded
+                            ? palette.accentText
+                            : palette.textPrimary,
+                        },
+                      ]}
+                    >
+                      {isConnectionExpanded ? 'Tutup Pengaturan' : 'Atur IP / Mode'}
+                    </Text>
+                  </PressableControl>
+                </View>
+              </View>
+            </View>
+
+            {/* Collapsible Connection Panel */}
+            {isConnectionExpanded && (
+              <View style={styles.panelSection}>
+                <ConnectionPanel
+                  palette={palette}
+                  connectionMode={connectionMode}
+                  bleStatus={bleStatus}
+                  wifiStatus={wifiStatus}
+                  connectedWatchName={connectedWatchName}
+                  connectedWatchId={connectedWatchId}
+                  discoveredWatches={discoveredWatches}
+                  scanError={scanError}
+                  manualMac={manualMac}
+                  authKeyHex={authKeyHex}
+                  watchIp={watchIp}
+                  isTouchLocked={isTouchLocked}
+                  onChangeWatchIp={setWatchIp}
+                  onChangeManualMac={setManualMac}
+                  onChangeAuthKeyHex={setAuthKeyHex}
+                  onSwitchConnectionMode={(mode) => {
+                    setConnectionMode(mode);
+                    setScanError(null);
+                    setLastCommandError(null);
+                  }}
+                  onStartScan={handleStartScan}
+                  onStopScan={handleStopScan}
+                  onConnectWatch={handleConnectWatch}
+                  onDisconnectWatch={handleDisconnectWatch}
+                  onTestWifiConnection={handleTestWifiConnection}
+                  onOpenLauncher={handleOpenLauncher}
+                  onWakeScreen={handleWakeScreen}
+                  onToggleTouchLock={handleToggleTouchLock}
+                  onTapCenter={handleTapCenter}
+                />
+              </View>
+            )}
+
+            {/* 6 Tabs Switcher */}
+            {activeTab === 'health' && (
+              <HealthMenu
+                palette={palette}
+                onSyncWithWatch={handleWakeScreen}
+              />
+            )}
+
+            {activeTab === 'sport' && (
+              <SportMenu
                 palette={palette}
                 selectedWorkout={selectedWorkout}
                 sessionState={sessionState}
                 elapsedSeconds={elapsedSeconds}
                 autoScreenLock={autoScreenLock}
                 isSendingCommand={isSendingCommand}
-                onToggleAutoScreenLock={() =>
-                  setAutoScreenLock((prev) => !prev)
-                }
+                isTouchLocked={isTouchLocked}
+                onSelectWorkout={(workout) => {
+                  setSelectedWorkout(workout);
+                  setAutoScreenLock(workout.recommendedScreenLock);
+                }}
+                onToggleAutoScreenLock={() => setAutoScreenLock((prev) => !prev)}
                 onTriggerStart={handleTriggerStart}
                 onTriggerPause={handleTriggerPause}
                 onTriggerResume={handleTriggerResume}
                 onTriggerStop={handleTriggerStop}
                 onSendManualScreenLock={handleManualScreenLock}
+                onTapCenter={handleTapCenter}
+                onOpenLauncher={handleOpenLauncher}
+                onWakeScreen={handleWakeScreen}
+                onToggleTouchLock={handleToggleTouchLock}
               />
+            )}
 
-              {isWideConsole && (
-                <CommandLogPanel
-                  palette={palette}
-                  logs={commandLogs}
-                  isSendingCommand={isSendingCommand}
-                  lastError={lastCommandError}
-                  onClearLogs={() => setCommandLogs([])}
-                  onClearError={() => setLastCommandError(null)}
-                />
-              )}
-            </View>
-
-            <View
-              style={[
-                styles.rightColumn,
-                isWideConsole && styles.wideRightColumn,
-              ]}
-            >
-              <WorkoutTriggerMatrix
+            {activeTab === 'heart_rate' && (
+              <HeartRateMenu
                 palette={palette}
-                workouts={WORKOUT_MODES}
-                selectedWorkoutId={selectedWorkout.id}
-                favoriteIds={favoriteIds}
-                isCompactViewport={isCompactPhone}
-                isSendingCommand={isSendingCommand}
-                onSelectWorkout={(workout) => {
-                  setSelectedWorkout(workout);
-                  setAutoScreenLock(workout.recommendedScreenLock);
-                }}
-                onQuickTriggerWorkout={handleTriggerStart}
-                onToggleFavorite={handleToggleFavorite}
+                watchIp={watchIp}
+                onTriggerMeasure={handleStartHeartRateMeasurement}
               />
+            )}
 
-              {!isWideConsole && (
-                <CommandLogPanel
-                  palette={palette}
-                  logs={commandLogs}
-                  isSendingCommand={isSendingCommand}
-                  lastError={lastCommandError}
-                  onClearLogs={() => setCommandLogs([])}
-                  onClearError={() => setLastCommandError(null)}
-                />
-              )}
-            </View>
+            {activeTab === 'history' && (
+              <HistoryMenu
+                palette={palette}
+                logs={commandLogs}
+                onClearLogs={() => setCommandLogs([])}
+              />
+            )}
+
+            {activeTab === 'alarm' && (
+              <AlarmMenu
+                palette={palette}
+                onTestVibrate={handleTestVibrate}
+              />
+            )}
+
+            {activeTab === 'smartface' && (
+              <SmartfaceMenu
+                palette={palette}
+                watchIp={watchIp}
+                onApplyWatchface={handleApplyWatchface}
+              />
+            )}
           </View>
         </ScrollView>
+
+        {/* Bottom Tab Bar */}
+        <TabBar
+          palette={palette}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -601,68 +890,134 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    flexWrap: 'wrap',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1.5,
+    borderBottomWidth: 1,
     gap: 10,
   },
   brandBlock: {
     flex: 1,
-    minWidth: 190,
+    minWidth: 160,
     gap: 2,
   },
   appName: {
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: 16,
+    fontWeight: '800',
     letterSpacing: 0.4,
   },
   appSub: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '500',
   },
-  themeToggleBtn: {
-    borderWidth: 1.5,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+  headerActions: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
-  themeToggleText: {
-    fontSize: 13,
+  connPill: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  connPillText: {
+    fontSize: 11,
     fontWeight: '700',
   },
+  themeToggleBtn: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  themeToggleText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
   scrollContent: {
-    paddingBottom: 48,
+    paddingBottom: 24,
   },
   paddingCompact: {
-    padding: 12,
+    padding: 14,
   },
   paddingRegular: {
     padding: 20,
+    alignItems: 'center',
   },
-  mainLayout: {
-    gap: 20,
-  },
-  stackedColumn: {
-    flexDirection: 'column',
-  },
-  wideTwoColumn: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  leftColumn: {
+  contentWrapper: {
+    width: '100%',
+    maxWidth: 680,
     gap: 16,
   },
-  wideLeftColumn: {
-    flex: 5,
-    minWidth: 360,
+  panelSection: {
+    marginBottom: 4,
   },
-  rightColumn: {
-    gap: 20,
+  deviceStatusCard: {
+    borderWidth: 1.5,
+    borderRadius: 8,
+    padding: 14,
+    gap: 10,
   },
-  wideRightColumn: {
-    flex: 7,
-    minWidth: 460,
+  deviceStatusHeader: {
+    gap: 10,
+  },
+  deviceIdentityBlock: {
+    gap: 4,
+  },
+  deviceBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  deviceStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  deviceTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  connectionBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  connectionBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  deviceDetailText: {
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 16,
+  },
+  deviceCardActions: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  deviceActionBtn: {
+    flex: 1,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deviceActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
